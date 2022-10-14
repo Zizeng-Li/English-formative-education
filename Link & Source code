@@ -1,0 +1,308 @@
+Link the the program is
+https://macoutreach.rocks/share/5df6111c
+
+myTitle = "Type Game"
+letterWidth = 7
+
+type alias Model = { time : Float
+                   , animation : GuessState
+                   , damage : Float
+                   , hp : Float
+                   , pics : List ( { time : Float } -> List (Shape Msg) )
+                   , correct : Pick
+                   , letters : List Char
+                   , nextRand : (List Int, Int)
+                   , badTime : Float
+                   , debug : String
+                   , lettersStore: List String
+                   , lettersRemaining: List String
+                   , lettersSoFar: String
+                   }
+init : Model
+init = { time = 0
+       , animation = Startup
+       , damage = 0
+       , hp = 8
+       , pics = [ \ _ -> []]
+       , correct = Pick0
+       , letters = []
+       , nextRand = ([-1],0)
+       , badTime = pi
+       , debug = ""
+       , lettersStore = [""]
+       , lettersRemaining = [""]
+       , lettersSoFar = ""
+       }
+       
+type GuessState = Waiting
+                | BadType Pick Float
+                | GoodType Float
+                | Startup
+
+type Msg = Tick Float GetKeyState
+         | RandIdx (List Int, Int)
+         | CheckType Pick
+
+type Pick = Pick0
+
+toString msg = case msg of
+                  Tick t _ -> "Tick "++String.fromFloat t
+                  RandIdx (idxs,idx) -> "RandIdx["++String.fromInt idx++"] "++(String.concat <| List.intersperse "," <| List.map String.fromInt idxs)
+                  CheckType Pick0 -> "CheckType 0"
+
+int2Pick i = case i of
+               _ -> Pick0
+
+listPick idx lst = case (idx,lst) of
+                     (0, x :: _ ) -> x
+                     (_, _) -> (\ _ -> [], ("","",""))
+
+pickPositions = [ (Pick0, (0, 32))
+                ]            
+aFish = 
+     group
+         [    oval 50 30
+                |> filled orange
+          ,   oval 50 30
+                |> outlined (solid 1) black
+          ,   ngon 3 20
+                |> filled orange 
+                |> move (-30,0)
+          ,   curve (0,0) [Pull (10,0) (20,-10)]
+                |> filled black
+                |> scale 0.5
+                |> rotate (degrees 180)
+                |> move (20,-10)
+         ,   circle 3 
+                |> filled black
+                |> move (12,5)
+         ,   wedge 10 0.25
+                |> filled (rgb 250 250 250)
+                |> rotate (degrees 180)
+        ,    wedge 10 0.25
+                |> outlined (solid 1) white
+                |> rotate (degrees 180)
+      ] 
+
+aGhost =
+     group
+         [ wedge 30 (1/2) 
+                |> filled gray |> rotate (degrees 90) 
+            , rect 60 30 
+                |> filled gray |> move (0,-15)
+            , oval 10 15 
+                |> filled white 
+                |> addOutline (solid 1) black
+                |> move (-10,10)
+            , oval 10 15 
+                |> filled white 
+                |> addOutline (solid 1) black
+                |> move (10,10)
+            , circle 2 |> filled black |> move (-10, 8) 
+            , circle 2 |> filled black |> move (10, 8)
+            , curve (0,0) [Pull (5,-20) (15,0)]
+                |> filled gray |> move (-30,-30)
+            , curve (0,0) [Pull (5,-20) (15,0)]
+                |> filled gray |> move (-15,-30)
+            , curve (0,0) [Pull (5,-20) (15,0)]
+                |> filled gray |> move (0,-30)
+            , curve (0,0) [Pull (5,-20) (15,0)]
+                |> filled gray |> move (15,-30)          
+        ]
+
+aStar = polygon [(-3,5),(0,12),(3,5),(12,5)
+                 ,(5,0),(7,-9),(0,-3),(-7,-9)
+                 ,(-5,0),(-12,5)]
+           |> filled yellow
+           |> scale 2
+           
+aInput = roundedRect 60 15 4 
+           |> outlined (solid 1) black
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+  case msg of
+    RandIdx (idxsBad,correct) ->
+      let
+          idxs = removeDups [] idxsBad
+          removeDups uniques next =
+            case next of
+              [] -> uniques
+              n :: ns -> removeDups ((fix uniques n)::uniques) ns
+
+          fix uniques n = if List.member n uniques
+                          then if n+1 == arrayLength then fix uniques 0 else fix uniques (n+1)
+                          else n
+
+      in
+          if model.animation == Startup
+                                then let
+                                       fourWords = List.map getWord idxs
+                                       (un,w,s) = Tuple.second <| listPick correct fourWords
+                                     in
+                                       ( { model | animation = Waiting
+                                                 , correct = int2Pick correct
+                                                 , pics = List.map Tuple.first fourWords
+                                                 , letters = stringToChars w
+                                                 , lettersStore = String.split "" w
+                                                 , lettersRemaining = String.split "" w
+                                                 , lettersSoFar = ""
+                                         }
+                                       , getRandChoices )
+
+                                else ( { model | nextRand = (idxs,correct) }, Cmd.none )
+
+    Tick t ( keys, _, _ ) ->
+      let lastTime = if model.time > 0 then model.time else t
+      in case model.animation of
+           Startup ->  ( { model | time = t
+                                 , animation = Startup
+                         }
+                       , Cmd.none )
+           Waiting ->  case model.lettersRemaining of
+                         l1 :: ls ->
+                          case keys (Key l1) of
+                           JustDown ->
+                            ({ model
+                               | lettersSoFar = model.lettersSoFar ++ l1
+                               , lettersRemaining = ls
+                               , time = t
+                               , animation = Waiting
+                             }, Cmd.none)
+                           _ -> (model, Cmd.none)
+                         [] -> (model, Cmd.none)
+                         
+           BadType pick tLeft
+             -> if tLeft < t - lastTime
+                  then ( { model | time = t
+                               , animation = Waiting
+                         }
+                       , Cmd.none )
+                  else ( { model | time = t
+                               , animation = BadType pick (tLeft - (t - lastTime))
+                         }
+                       , Cmd.none )
+           GoodType tLeft
+             -> if tLeft < t - lastTime
+                  then let
+                         (idxs,correct) = model.nextRand
+                         fourWords = List.map getWord idxs
+                         (un,w,s) = Tuple.second <| listPick correct fourWords
+                       in
+                         ( { model | animation = Waiting
+                                   , correct = int2Pick correct
+                                   , pics = List.map Tuple.first fourWords
+                                   , letters = stringToChars w
+                                   , badTime = model.badTime * 0.9
+                                   , time = t
+                                   , lettersStore = String.split "" w
+                                   , lettersRemaining = String.split "" w
+                                   , lettersSoFar = ""
+                           }
+                         , getRandChoices )
+                  else ( { model | time = t
+                               , animation = GoodType (tLeft - (t - lastTime))
+                         }
+                       , Cmd.none )
+
+    CheckType pick
+      -> case model.animation of
+           Waiting
+             -> if (Debug.log (toString <| CheckType pick) pick == model.correct) && (model.lettersRemaining == [])
+                  then
+                    ( { model | animation = GoodType <| model.badTime, damage = model.damage + 1}, getRandChoices )
+                  else ( { model | animation = BadType pick model.badTime, lettersRemaining = model.lettersStore, lettersSoFar = "", hp = model.hp - 1}, Cmd.none )
+           other -> ( model , Cmd.none )
+
+            
+view : Model -> Collage Msg
+view model = if model.hp == 0
+             then collage 192 128 <| [ "You are scared by ghosts!!!" |> text |> size 12 |> bold |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (-80,-30) ]
+                                     ++ [aGhost |> scale 0.75 |> move(10,20)]
+             else if model.damage == 12
+             then collage 192 128 <| [ "You have purified ghosts!!!" |> text |> size 12 |> bold |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (-80,-30) ] 
+                                     ++ [aFish |> scale 0.75|> move(10,20)]
+             else collage 192 128
+  <| ( case model.animation of
+           Startup ->  []
+           Waiting ->  ( List.map2 (display model.time) model.pics pickPositions )
+                       ++ ( List.map2 (trigger model.time) model.pics pickPositions )
+                       ++
+                       [ text model.lettersSoFar |> filled black |> move (-20,-20)]
+                       ++
+                       [ "Damage: " ++ String.fromFloat model.damage |> text |> size 8 |> fixedwidth |> filled black |> move (52,-52)]
+                       ++
+                       [ "HP: " ++ String.fromFloat model.hp |> text |> size 8 |> fixedwidth |> filled black |> move (-95,-59)]
+
+           BadType pick tLeft
+                   ->  ( List.map2 (displayBad pick tLeft) model.pics pickPositions )
+                       ++
+                       ( List.indexedMap (oneLetter 0 1) model.letters)
+                       ++
+                       [ "HP: " ++ String.fromFloat model.hp |> text |> size 8 |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (-95,-59)]
+                       ++
+                       [ "Scare!"|> text |> size 12|> bold |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (50,-20) ]
+                       ++
+                       [ "Damage: " ++ String.fromFloat model.damage |> text |> size 8 |> fixedwidth |> filled black |> move (52,-52)]
+                       ++
+                       [aGhost|> scale 0.15 |> move(-80,-35+sin (20 * model.time))]
+           GoodType tLeft
+                   ->  ( List.map2 (displayGood model.correct (max 0 (2 * (model.badTime - tLeft) / model.badTime)) model.time)
+                                   model.pics
+                                   pickPositions )
+                       ++
+                       [ "HP: " ++ String.fromFloat model.hp |> text |> size 8 |> fixedwidth |> filled black |> move (-95,-59)]
+                       ++
+                       [aStar |> scale 0.2 |> move (62,-20 + sin (20 * model.time))]
+                       ++
+                       [ "Damage: " ++ String.fromFloat model.damage |> text |> size 8 |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (52,-52)]
+                       ++
+                       [ "Blessing!" |> text |> size 10 |> bold |> fixedwidth |> filled (rgb (125 + 125 * sin (20 * model.time)) 0 0) |> move (-93,-30) ]
+                       )
+                       ++
+                       [ "Game ends when HP = 0 or Damage = 12" |> text |> size 6 |> fixedwidth |> filled black |> move (-60,-42)]
+                       ++
+                       ["Type letters and" |> text |> size 6 |> fixedwidth |> filled black |> move (45,52)]
+                       ++
+                       ["click image to" |> text |> size 6 |> fixedwidth |> filled black |> move (45,43)]
+                       ++
+                       ["check accuracy" |> text |> size 6 |> fixedwidth |> filled black |> move (45,34)]
+                       ++
+                       ["Hint:" |> text |> size 6 |> fixedwidth |> filled black |> move (45,21)]
+                       ++
+                       ["Wrong letters" |> text |> size 6 |> fixedwidth |> filled black |> move (45,12)]
+                       ++
+                       ["will not be" |> text |> size 6 |> fixedwidth |> filled black |> move (45,3)]
+                       ++
+                       ["typed inside" |> text |> size 6 |> fixedwidth |> filled black |> move (45,-6)]
+                       ++
+                       ["Try entering" |> text |> size 6 |> fixedwidth |> filled black |> move (-95,52)]
+                       ++
+                       ["different" |> text |> size 6 |> fixedwidth |> filled black |> move (-95,43)]
+                       ++
+                       ["letters while" |> text |> size 6 |> fixedwidth |> filled black |> move (-95,34)]
+                       ++
+                       ["nothing appears" |> text |> size 6 |> fixedwidth |> filled black |> move (-95,25)]
+                       ++
+                       [rect (model.damage*9) 5 |> filled red |> move (-7,-50)]
+                       ++
+                       [rect (model.hp*20) 4 |> filled green |> move (10,-57)]
+                       ++
+                       [aGhost|> scale 0.25 |> move(62,-35)]
+                       ++
+                       [aFish |> scale 0.25 |> move(-80,-48)]
+                       ++
+                       [aInput |> move(5,-16.5)]
+
+
+trigger t pic (msg, pos) = group [ rect 80 55 |> filled (rgba 0 0 0 0) |> move pos |> notifyTap (CheckType msg)]
+display t pic (msg, pos) = (group <| pic { time = t }) |> clip (rect 192 128 |> ghost) |> scale 0.4375 |> move pos
+displayBad pick t pic (msg, pos) = if pick == msg
+                                  then ((group <| pic { time = t }) |> move (10 * cos (30*t),0)) |> clip (rect 192 128 |> ghost) |> scale 0.4375 |> move pos
+                                  else (group <| pic { time = t }) |> clip (rect 192 128 |> ghost) |> scale 0.4375 |> move pos
+displayGood pick frac t pic (msg, pos) = if pick == msg
+                                  then ((group <| pic { time = t })) |> clip (rect 192 128 |> ghost) |> scale 0.4375 |> move pos
+                                  else (group <| pic { time = t } ++ [rect 192 128 |> filled (rgba 255 255 255 frac)] ) |> clip (rect 192 128 |> ghost) |> scale 0.4375 |> move pos
+getRandChoices = Random.generate RandIdx (Random.map2 ( \ i c -> ([i],c) ) oneRandIdx rand0)
+oneRandIdx = Random.int 0 (arrayLength - 1)
+rand0 = Random.int 0 0
